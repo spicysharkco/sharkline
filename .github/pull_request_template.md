@@ -1,0 +1,1 @@
+- [ ] I agree to the [contributor agreement](https://github.com/spicysharkco/sharkline/blob/main/CONTRIBUTING.md#contributor-agreement) for this contribution, including the assignment of its copyright to spicysharkco.

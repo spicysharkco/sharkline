@@ -1,0 +1,15 @@
+{
+  "session_id": "00000000-0000-4000-8000-000000000000",
+  "transcript_path": "/example/project/.claude/session.jsonl",
+  "cwd": "/example/project",
+  "workspace": {"current_dir": "/example/project", "project_dir": "/example/project"},
+  "version": "2.1.0",
+  "model": {"id": "claude-opus-5-5", "display_name": "Opus 5.5"},
+  "effort": {"level": "xhigh"},
+  "cost": {"total_duration_ms": 5700000},
+  "context_window": {"context_window_size": 200000, "used_percentage": 30},
+  "rate_limits": {
+    "five_hour": {"used_percentage": 55, "resets_at": 1750008430},
+    "seven_day": {"used_percentage": 88, "resets_at": 1750541800}
+  }
+}

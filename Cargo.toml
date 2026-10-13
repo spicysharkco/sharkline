@@ -1,0 +1,25 @@
+[package]
+name = "sharkline"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+description = "A fast Claude Code statusline (status line): reads the status JSON on stdin, prints a HUD layout, forks nothing on a warm render"
+license = "PolyForm-Noncommercial-1.0.0"
+repository = "https://github.com/spicysharkco/sharkline"
+readme = "README.md"
+keywords = ["claude-code", "claude", "statusline", "status-line", "cli"]
+categories = ["command-line-utilities"]
+publish = false
+
+[[bin]]
+name = "sharkline"
+path = "src/main.rs"
+
+[dependencies]
+memchr = "2"
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
