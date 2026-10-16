@@ -16,11 +16,14 @@ name = "sharkline"
 path = "src/main.rs"
 
 # cargo-binstall: where the release archives (see .github/workflows/release.yml
-# and .github/scripts/package.sh) are and what is inside them.
+# and .github/scripts/package.sh) are and what is inside them. quick-install is
+# off, so binstall never downloads a build of this crate from a third party
+# (cargo-quickinstall).
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-{ target }.tar.gz"
 pkg-fmt = "tgz"
 bin-dir = "{ name }-{ version }-{ target }/{ bin }{ binary-ext }"
+disabled-strategies = ["quick-install"]
 
 [dependencies]
 memchr = "2"

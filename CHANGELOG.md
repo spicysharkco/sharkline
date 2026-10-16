@@ -28,7 +28,7 @@ Code pipes its status JSON to the command on stdin, and sharkline prints a compa
   second. The transcript is read once and then only the bytes added since.
 - Prebuilt binaries on the releases page for macOS (Apple silicon and Intel) and Linux
   (x86-64 and ARM64, statically linked), with a `SHA256SUMS` file and build provenance
-  attestations. `cargo-binstall` can use the archives too. `cargo install --locked
-  --git` still builds from source.
+  attestations. `cargo binstall --git` can use the archives too. `cargo install
+  --locked --git` still builds from source.
 
 [0.1.0]: https://github.com/spicysharkco/sharkline/releases/tag/v0.1.0

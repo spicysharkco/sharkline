@@ -1,8 +1,9 @@
 name: release
 
 # A tag `vX.Y.Z` builds the archives and publishes a GitHub release.
-# A manual run (workflow_dispatch) builds the same archives and keeps them as
-# workflow artifacts only; it publishes nothing, so it works as a dry run.
+# A manual run (workflow_dispatch) is a dry run: it runs every job but publish, so
+# it builds, checks and sums the archives and keeps them as workflow artifacts.
+# The publish job, the only one that can write, is skipped.
 on:
   push:
     tags: ['v*']
@@ -22,8 +23,9 @@ env:
 
 jobs:
   # The one place the version is read. On a tag it must be `v` + the version in
-  # Cargo.toml, and CHANGELOG.md must have a section for it, so a wrong tag
-  # fails here and not after four builds.
+  # Cargo.toml, CHANGELOG.md must have a section for it, and the tagged commit
+  # must be on the default branch, so a wrong tag fails here and not after four
+  # builds. A manual run reports the same problems as warnings.
   meta:
     name: version and tag
     runs-on: ubuntu-latest
@@ -31,8 +33,10 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
+      # Full history, for the branch check below. Only this job needs it.
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Read the version and check the tag
@@ -40,16 +44,24 @@ jobs:
         env:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           version="$(sed -n '/^\[package\]/,/^\[/{s/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*$/\1/p;}' Cargo.toml)"
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]] \
             || { echo "::error::cannot read a version from Cargo.toml (got '$version')"; exit 1; }
-          if [[ "$REF_TYPE" == tag ]]; then
-            [[ "$REF_NAME" == "v$version" ]] \
-              || { echo "::error::tag $REF_NAME does not match Cargo.toml version $version (expected v$version)"; exit 1; }
-            .github/scripts/release-notes.sh "$version" > /dev/null
+          level=warning
+          if [[ "$REF_TYPE" == tag ]]; then level=error; fi
+          failed=0
+          problem() { echo "::$level::$*"; if [[ "$level" == error ]]; then failed=1; fi; }
+          if [[ "$REF_TYPE" == tag && "$REF_NAME" != "v$version" ]]; then
+            problem "tag $REF_NAME does not match Cargo.toml version $version (expected v$version)"
           fi
+          .github/scripts/release-notes.sh "$version" > /dev/null \
+            || problem "CHANGELOG.md has no section for version $version"
+          git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH" \
+            || problem "commit $GITHUB_SHA is not on $DEFAULT_BRANCH"
+          [[ "$failed" -eq 0 ]] || exit 1
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   build:
@@ -63,17 +75,13 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             os: macos-latest
-            smoke: true
-          # macos-latest is Apple silicon: this one is cross-built there and not run.
+          # macos-latest is Apple silicon: the Intel build runs on an Intel runner.
           - target: x86_64-apple-darwin
-            os: macos-latest
-            smoke: false
+            os: macos-15-intel
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-            smoke: true
           - target: aarch64-unknown-linux-musl
             os: ubuntu-24.04-arm
-            smoke: true
     env:
       TARGET: ${{ matrix.target }}
       VERSION: ${{ needs.meta.outputs.version }}
@@ -106,6 +114,7 @@ jobs:
           fi
           cargo build --release --locked --target "$TARGET"
 
+      # package.sh also refuses a binary that is not built for $TARGET.
       - name: Package
         run: .github/scripts/package.sh "$TARGET" "$VERSION"
 
@@ -113,7 +122,6 @@ jobs:
       # payload with the unpacked binary. HOME and the cache are a scratch
       # directory, so nothing here reads or writes a real one.
       - name: Smoke test the archive
-        if: matrix.smoke
         run: |
           set -euo pipefail
           tmp="$(mktemp -d)"
@@ -133,10 +141,56 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # Gathers the four archives into one set and checks they are the right four.
+  # It runs on a manual run too, so a dry run covers everything except the
+  # release itself. Read-only: this job has no token that can write.
+  assemble:
+    name: assemble release files
+    needs: [meta, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      # No merging: each artifact lands in its own directory, in/archive-TARGET.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: archive-*
+          path: in
+
+      # archive-TARGET must hold exactly sharkline-VERSION-TARGET.tar.gz, so each
+      # archive is tied to the build job of its own target.
+      - name: Check each archive and write SHA256SUMS
+        run: |
+          set -euo pipefail
+          targets=(aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-musl aarch64-unknown-linux-musl)
+          found="$(cd in && find . -mindepth 1 -maxdepth 1 | sort | tr '\n' ' ')"
+          expected="$(printf './archive-%s\n' "${targets[@]}" | sort | tr '\n' ' ')"
+          [[ "$found" == "$expected" ]] \
+            || { echo "::error::expected the artifacts $expected but found $found"; exit 1; }
+          mkdir dist
+          for t in "${targets[@]}"; do
+            name="sharkline-${VERSION}-${t}.tar.gz"
+            files="$(cd "in/archive-$t" && find . -mindepth 1 | sort | tr '\n' ' ')"
+            [[ "$files" == "./$name " && -f "in/archive-$t/$name" && ! -L "in/archive-$t/$name" ]] \
+              || { echo "::error::archive-$t must hold only the regular file $name, found: $files"; exit 1; }
+            mv "in/archive-$t/$name" dist/
+          done
+          cd dist
+          sha256sum -- *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-dist
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
   publish:
     name: publish release
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs: [meta, build]
+    needs: [meta, assemble]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # The only job that can write: it creates the release and signs the provenance.
@@ -154,18 +208,31 @@ jobs:
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: archive-*
-          merge-multiple: true
+          name: release-dist
           path: dist
 
-      - name: Write SHA256SUMS
+      - name: Check the files
         working-directory: dist
         run: |
           set -euo pipefail
-          count="$(find . -maxdepth 1 -name '*.tar.gz' | wc -l)"
-          [[ "$count" -eq 4 ]] || { echo "::error::expected 4 archives, found $count"; exit 1; }
-          sha256sum -- *.tar.gz > SHA256SUMS
-          cat SHA256SUMS
+          sha256sum -c SHA256SUMS
+          lines="$(wc -l < SHA256SUMS)"
+          files="$(find . -mindepth 1 | wc -l)"
+          [[ "$lines" -eq 4 && "$files" -eq 5 ]] \
+            || { echo "::error::expected 4 archives and SHA256SUMS, found $lines sums and $files entries"; exit 1; }
+
+      # `gh release create --verify-tag` only checks that the tag exists. A tag
+      # moved while this run was building would publish these archives under a
+      # tag that no longer points at the commit they were built from.
+      - name: Check the tag still points at the built commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          now="$(gh api "repos/$GH_REPO/commits/refs/tags/$TAG" --jq .sha)"
+          [[ "$now" == "$GITHUB_SHA" ]] \
+            || { echo "::error::tag $TAG now points at $now, but this run built $GITHUB_SHA"; exit 1; }
 
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -179,6 +246,7 @@ jobs:
           set -euo pipefail
           .github/scripts/release-notes.sh "$VERSION" > "$RUNNER_TEMP/notes.md"
           flags=()
-          if [[ "$VERSION" == *-* ]]; then flags+=(--prerelease); fi
+          # Build metadata (1.0.0+build-5) is not a pre-release marker; a hyphen before it is.
+          if [[ "${VERSION%%+*}" == *-* ]]; then flags+=(--prerelease); fi
           gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" \
             ${flags[@]+"${flags[@]}"} dist/*.tar.gz dist/SHA256SUMS

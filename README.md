@@ -75,23 +75,35 @@ archive, unpack it and put the binary on your `PATH` (the example is version 0.1
 Apple silicon):
 
 ```sh
-shasum -a 256 -c SHA256SUMS --ignore-missing
-gh attestation verify sharkline-0.1.0-aarch64-apple-darwin.tar.gz --repo spicysharkco/sharkline
+shasum -a 256 -c --ignore-missing SHA256SUMS    # macOS
+sha256sum -c --ignore-missing SHA256SUMS        # Linux
+gh attestation verify sharkline-0.1.0-aarch64-apple-darwin.tar.gz --repo spicysharkco/sharkline \
+  --signer-workflow spicysharkco/sharkline/.github/workflows/release.yml \
+  --source-ref refs/tags/v0.1.0
 tar -xzf sharkline-0.1.0-aarch64-apple-darwin.tar.gz
+xattr -dr com.apple.quarantine sharkline-0.1.0-aarch64-apple-darwin    # macOS, browser download only
+mkdir -p ~/.local/bin
 install -m 755 sharkline-0.1.0-aarch64-apple-darwin/sharkline ~/.local/bin/
 ```
 
-`shasum` checks that the download is intact. `gh attestation verify` (GitHub CLI)
-checks that GitHub Actions built the archive from this repository. Use the path you
-installed to (here `~/.local/bin/sharkline`) as the `command` in "Configure Claude
-Code" below. If you use `cargo-binstall`,
-`cargo binstall --git https://github.com/spicysharkco/sharkline sharkline` fetches the
-same archive.
+`shasum` and `sha256sum` check that the download is intact. `gh attestation verify`
+(GitHub CLI) checks that this repository's release workflow, run for the tag you
+downloaded, built the archive; it reads the attestation through the GitHub API, so run
+`gh auth login` first. Use the path you installed to (here `~/.local/bin/sharkline`) as
+the `command` in "Configure Claude Code" below. If you use `cargo-binstall`,
+`cargo binstall --git https://github.com/spicysharkco/sharkline sharkline` clones the
+repository, reads the version from `Cargo.toml` on the default branch and downloads that
+version's archive (so it can be newer than the latest release; if that version has no
+archive, binstall builds from source). It checks neither `SHA256SUMS` nor the
+attestation.
 
-The macOS binaries are not notarised by Apple. If a browser download is blocked ("cannot
-be opened because the developer cannot be verified"), clear the quarantine flag on the
-unpacked directory with `xattr -dr com.apple.quarantine sharkline-0.1.0-aarch64-apple-darwin`.
-A download made with `curl` or `gh release download` is not flagged.
+The macOS binaries are not notarised by Apple. A browser download is quarantined, and
+the flag follows the files through `tar`, `cp` and `install`, so Gatekeeper refuses to
+run the installed binary ("Apple could not verify “sharkline” is free of malware that
+may harm your Mac or compromise your privacy" on macOS 15 and later, "cannot be opened
+because the developer cannot be verified" before). The `xattr` line clears the flag on
+the unpacked directory, so run it after `tar` and before `install`. A download made
+with `curl` or `gh release download` is not flagged, and that line changes nothing.
 
 ### With cargo
 
