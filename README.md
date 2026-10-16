@@ -1,5 +1,8 @@
 # sharkline
 
+[![CI](https://github.com/spicysharkco/sharkline/actions/workflows/ci.yml/badge.svg)](https://github.com/spicysharkco/sharkline/actions/workflows/ci.yml)
+[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)](LICENSE)
+
 A fast Claude Code statusline: a status line for
 [Claude Code](https://docs.claude.com/en/docs/claude-code/overview), written in
 Rust. Claude Code pipes a JSON payload to the command on stdin; this
@@ -53,6 +56,44 @@ At most four lines are printed, wrapped at ` | ` to `COLUMNS` (Claude Code sets
 it for the command). Anything beyond four lines becomes `... (+N lines)`.
 
 ## Install
+
+### Prebuilt binary
+
+No Rust toolchain is needed. From the
+[Releases page](https://github.com/spicysharkco/sharkline/releases/latest), download
+the archive for your system and the `SHA256SUMS` file:
+
+| System | Archive |
+|---|---|
+| macOS, Apple silicon | `sharkline-VERSION-aarch64-apple-darwin.tar.gz` |
+| macOS, Intel | `sharkline-VERSION-x86_64-apple-darwin.tar.gz` |
+| Linux, x86-64 | `sharkline-VERSION-x86_64-unknown-linux-musl.tar.gz` |
+| Linux, ARM64 | `sharkline-VERSION-aarch64-unknown-linux-musl.tar.gz` |
+
+The Linux binaries are statically linked, so they run on any distribution. Check the
+archive, unpack it and put the binary on your `PATH` (the example is version 0.1.0 for
+Apple silicon):
+
+```sh
+shasum -a 256 -c SHA256SUMS --ignore-missing
+gh attestation verify sharkline-0.1.0-aarch64-apple-darwin.tar.gz --repo spicysharkco/sharkline
+tar -xzf sharkline-0.1.0-aarch64-apple-darwin.tar.gz
+install -m 755 sharkline-0.1.0-aarch64-apple-darwin/sharkline ~/.local/bin/
+```
+
+`shasum` checks that the download is intact. `gh attestation verify` (GitHub CLI)
+checks that GitHub Actions built the archive from this repository. Use the path you
+installed to (here `~/.local/bin/sharkline`) as the `command` in "Configure Claude
+Code" below. If you use `cargo-binstall`,
+`cargo binstall --git https://github.com/spicysharkco/sharkline sharkline` fetches the
+same archive.
+
+The macOS binaries are not notarised by Apple. If a browser download is blocked ("cannot
+be opened because the developer cannot be verified"), clear the quarantine flag on the
+unpacked directory with `xattr -dr com.apple.quarantine sharkline-0.1.0-aarch64-apple-darwin`.
+A download made with `curl` or `gh release download` is not flagged.
+
+### With cargo
 
 You need Rust 1.89 or newer (the crate uses edition 2024).
 

@@ -1,0 +1,184 @@
+name: release
+
+# A tag `vX.Y.Z` builds the archives and publishes a GitHub release.
+# A manual run (workflow_dispatch) builds the same archives and keeps them as
+# workflow artifacts only; it publishes nothing, so it works as a dry run.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run per tag or branch at a time; a release run is never cancelled half way.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: 1.89.0
+
+jobs:
+  # The one place the version is read. On a tag it must be `v` + the version in
+  # Cargo.toml, and CHANGELOG.md must have a section for it, so a wrong tag
+  # fails here and not after four builds.
+  meta:
+    name: version and tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Read the version and check the tag
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="$(sed -n '/^\[package\]/,/^\[/{s/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*$/\1/p;}' Cargo.toml)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]] \
+            || { echo "::error::cannot read a version from Cargo.toml (got '$version')"; exit 1; }
+          if [[ "$REF_TYPE" == tag ]]; then
+            [[ "$REF_NAME" == "v$version" ]] \
+              || { echo "::error::tag $REF_NAME does not match Cargo.toml version $version (expected v$version)"; exit 1; }
+            .github/scripts/release-notes.sh "$version" > /dev/null
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: meta
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            smoke: true
+          # macos-latest is Apple silicon: this one is cross-built there and not run.
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            smoke: false
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            smoke: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            smoke: true
+    env:
+      TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust ${{ env.RUST_TOOLCHAIN }}
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target "$TARGET" --no-self-update
+          rustup default "$RUST_TOOLCHAIN"
+          rustc --version
+          cargo --version
+
+      # sharkline has no C dependency today, so rustc only needs the musl runtime
+      # it bundles. musl-gcc is set as the C compiler below anyway, so a C
+      # dependency added later is built against musl too.
+      - name: Install musl-tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            export "CC_${TARGET//-/_}=musl-gcc"
+          fi
+          cargo build --release --locked --target "$TARGET"
+
+      - name: Package
+        run: .github/scripts/package.sh "$TARGET" "$VERSION"
+
+      # Unpack the archive as a user would, and render the repository's sample
+      # payload with the unpacked binary. HOME and the cache are a scratch
+      # directory, so nothing here reads or writes a real one.
+      - name: Smoke test the archive
+        if: matrix.smoke
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          tar -xzf "target/dist/sharkline-${VERSION}-${TARGET}.tar.gz" -C "$tmp"
+          dir="$tmp/sharkline-${VERSION}-${TARGET}"
+          ls -l "$dir"
+          file "$dir/sharkline"
+          out="$(HOME="$tmp/home" XDG_CACHE_HOME="$tmp/cache" NO_COLOR=1 SHARKLINE_NOW=1750000000 \
+            "$dir/sharkline" < tests/fixtures/stdin.json)"
+          echo "$out"
+          [[ "$out" == *"Model: Opus 5.5"* ]]
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: archive-${{ matrix.target }}
+          path: target/dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: publish release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [meta, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The only job that can write: it creates the release and signs the provenance.
+    permissions:
+      contents: write # create the release and upload the assets
+      id-token: write # Sigstore identity that signs the attestation
+      attestations: write # store the attestation
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: archive-*
+          merge-multiple: true
+          path: dist
+
+      - name: Write SHA256SUMS
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          count="$(find . -maxdepth 1 -name '*.tar.gz' | wc -l)"
+          [[ "$count" -eq 4 ]] || { echo "::error::expected 4 archives, found $count"; exit 1; }
+          sha256sum -- *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.tar.gz
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          .github/scripts/release-notes.sh "$VERSION" > "$RUNNER_TEMP/notes.md"
+          flags=()
+          if [[ "$VERSION" == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" \
+            ${flags[@]+"${flags[@]}"} dist/*.tar.gz dist/SHA256SUMS

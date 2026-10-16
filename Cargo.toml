@@ -15,6 +15,13 @@ publish = false
 name = "sharkline"
 path = "src/main.rs"
 
+# cargo-binstall: where the release archives (see .github/workflows/release.yml
+# and .github/scripts/package.sh) are and what is inside them.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-{ target }.tar.gz"
+pkg-fmt = "tgz"
+bin-dir = "{ name }-{ version }-{ target }/{ bin }{ binary-ext }"
+
 [dependencies]
 memchr = "2"
 serde_json = "1"
