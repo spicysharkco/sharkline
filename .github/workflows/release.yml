@@ -59,7 +59,7 @@ jobs:
           fi
           .github/scripts/release-notes.sh "$version" > /dev/null \
             || problem "CHANGELOG.md has no section for version $version"
-          git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH" \
+          git merge-base --is-ancestor "$GITHUB_SHA" "refs/remotes/origin/$DEFAULT_BRANCH" \
             || problem "commit $GITHUB_SHA is not on $DEFAULT_BRANCH"
           [[ "$failed" -eq 0 ]] || exit 1
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -215,24 +215,17 @@ jobs:
         working-directory: dist
         run: |
           set -euo pipefail
+          targets=(aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-musl aarch64-unknown-linux-musl)
+          archives=()
+          for t in "${targets[@]}"; do archives+=("sharkline-$VERSION-$t.tar.gz"); done
+          found="$(find . -mindepth 1 | sort | tr '\n' ' ')"
+          expected="$(printf './%s\n' "${archives[@]}" SHA256SUMS | sort | tr '\n' ' ')"
+          [[ "$found" == "$expected" && -z "$(find . -mindepth 1 ! -type f)" ]] \
+            || { echo "::error::expected the regular files $expected but found $found"; exit 1; }
+          summed="$(awk '{print $2}' SHA256SUMS | sort | tr '\n' ' ')"
+          [[ "$summed" == "$(printf '%s\n' "${archives[@]}" | sort | tr '\n' ' ')" ]] \
+            || { echo "::error::SHA256SUMS must list each archive once, found: $summed"; exit 1; }
           sha256sum -c SHA256SUMS
-          lines="$(wc -l < SHA256SUMS)"
-          files="$(find . -mindepth 1 | wc -l)"
-          [[ "$lines" -eq 4 && "$files" -eq 5 ]] \
-            || { echo "::error::expected 4 archives and SHA256SUMS, found $lines sums and $files entries"; exit 1; }
-
-      # `gh release create --verify-tag` only checks that the tag exists. A tag
-      # moved while this run was building would publish these archives under a
-      # tag that no longer points at the commit they were built from.
-      - name: Check the tag still points at the built commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          now="$(gh api "repos/$GH_REPO/commits/refs/tags/$TAG" --jq .sha)"
-          [[ "$now" == "$GITHUB_SHA" ]] \
-            || { echo "::error::tag $TAG now points at $now, but this run built $GITHUB_SHA"; exit 1; }
 
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -248,5 +241,12 @@ jobs:
           flags=()
           # Build metadata (1.0.0+build-5) is not a pre-release marker; a hyphen before it is.
           if [[ "${VERSION%%+*}" == *-* ]]; then flags+=(--prerelease); fi
+          # `--verify-tag` only checks that the tag exists. A tag moved while this
+          # run was building would publish these archives under a tag that no
+          # longer points at the commit they were built from, so check it here,
+          # as close to the release as the API allows.
+          now="$(gh api "repos/$GH_REPO/commits/refs/tags/$TAG" --jq .sha)"
+          [[ "$now" == "$GITHUB_SHA" ]] \
+            || { echo "::error::tag $TAG now points at $now, but this run built $GITHUB_SHA"; exit 1; }
           gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" \
             ${flags[@]+"${flags[@]}"} dist/*.tar.gz dist/SHA256SUMS

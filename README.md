@@ -75,18 +75,20 @@ archive, unpack it and put the binary on your `PATH` (the example is version 0.1
 Apple silicon):
 
 ```sh
-shasum -a 256 -c --ignore-missing SHA256SUMS    # macOS
-sha256sum -c --ignore-missing SHA256SUMS        # Linux
-gh attestation verify sharkline-0.1.0-aarch64-apple-darwin.tar.gz --repo spicysharkco/sharkline \
+a=sharkline-0.1.0-aarch64-apple-darwin    # your version and system, from the table above
+grep -F " $a.tar.gz" SHA256SUMS | shasum -a 256 -c -    # macOS
+grep -F " $a.tar.gz" SHA256SUMS | sha256sum -c -        # Linux
+gh attestation verify "$a.tar.gz" --repo spicysharkco/sharkline \
   --signer-workflow spicysharkco/sharkline/.github/workflows/release.yml \
   --source-ref refs/tags/v0.1.0
-tar -xzf sharkline-0.1.0-aarch64-apple-darwin.tar.gz
-xattr -dr com.apple.quarantine sharkline-0.1.0-aarch64-apple-darwin    # macOS, browser download only
+tar -xzf "$a.tar.gz"
+xattr -dr com.apple.quarantine "$a"    # macOS, browser download only
 mkdir -p ~/.local/bin
-install -m 755 sharkline-0.1.0-aarch64-apple-darwin/sharkline ~/.local/bin/
+install -m 755 "$a/sharkline" ~/.local/bin/
 ```
 
-`shasum` and `sha256sum` check that the download is intact. `gh attestation verify`
+`shasum` and `sha256sum` check that the download is intact and print `OK`; `grep` picks
+the line for your archive, so this also works with BusyBox. `gh attestation verify`
 (GitHub CLI) checks that this repository's release workflow, run for the tag you
 downloaded, built the archive; it reads the attestation through the GitHub API, so run
 `gh auth login` first. Use the path you installed to (here `~/.local/bin/sharkline`) as
