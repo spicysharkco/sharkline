@@ -73,7 +73,7 @@ the archive for your system and the `SHA256SUMS` file:
 The Linux binaries are statically linked, so they run on any distribution. Check the
 archive, unpack it and put the binary on your `PATH`. The example is version 0.1.0 for
 Apple silicon; set `a` to the archive name for your version and system from the table
-above:
+above, without `.tar.gz`:
 
 ```sh
 a=sharkline-0.1.0-aarch64-apple-darwin
@@ -113,13 +113,13 @@ with `curl` or `gh release download` is not flagged, and that line changes nothi
 
 You need Rust 1.89 or newer (the crate uses edition 2024).
 
-From Git:
+From Git, with the dependency versions of the committed `Cargo.lock`:
 
 ```sh
-cargo install --git https://github.com/spicysharkco/sharkline
-# or, to use the committed Cargo.lock:
 cargo install --locked --git https://github.com/spicysharkco/sharkline
 ```
+
+Without `--locked`, cargo picks the newest compatible dependency versions instead.
 
 From source:
 
@@ -308,11 +308,12 @@ modified, staged and untracked files), a synthetic 5 MB transcript (about
 1,800 tool calls), a fake OMC plugin directory and an update cache. All data
 was generated; the cache lived in a scratch `XDG_CACHE_HOME`.
 
+Warm: 5 warm-up runs, then 1000 timed runs. Cold cache: the cache directory is
+removed before every run, so git runs and the transcript tail is read; `reset.sh` is
+`rm -rf "$XDG_CACHE_HOME/sharkline"`.
+
 ```sh
-# warm: 5 warm-up runs, then 1000 timed runs
 hyperfine -N -w 5 -r 1000 --input payload.json sharkline
-# cold cache: the cache directory is removed before every run (git runs,
-# the transcript tail is read). reset.sh is: rm -rf "$XDG_CACHE_HOME/sharkline"
 hyperfine -N -w 0 -r 1000 --prepare ./reset.sh --input payload.json sharkline
 ```
 
