@@ -308,9 +308,10 @@ modified, staged and untracked files), a synthetic 5 MB transcript (about
 1,800 tool calls), a fake OMC plugin directory and an update cache. All data
 was generated; the cache lived in a scratch `XDG_CACHE_HOME`.
 
-Warm: 5 warm-up runs, then 1000 timed runs. Cold cache: the cache directory is
-removed before every run, so git runs and the transcript tail is read; `reset.sh` is
-`rm -rf "$XDG_CACHE_HOME/sharkline"`.
+Warm: 5 warm-up runs, then 1000 timed runs. Cold cache: no warm-up runs, and
+the cache directory is removed before every run, so git runs and the transcript tail is
+read; `reset.sh` is `rm -rf "${XDG_CACHE_HOME:?}/sharkline"`, with `XDG_CACHE_HOME`
+exported to the scratch directory for both runs.
 
 ```sh
 hyperfine -N -w 5 -r 1000 --input payload.json sharkline
