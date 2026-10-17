@@ -394,3 +394,5 @@ Any commercial use needs a separate license from the copyright holder; ask
 Contributions are welcome. Each one is assigned to spicysharkco under the
 contributor agreement in [CONTRIBUTING.md](CONTRIBUTING.md), so spicysharkco owns
 the whole project.
+
+To report a security problem, see [SECURITY.md](SECURITY.md).
