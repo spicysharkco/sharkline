@@ -4,6 +4,28 @@ All notable changes to sharkline are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-10-17
+
+### Added
+
+- `sharkline --version` (or `-V`) prints the version, and `sharkline --help` (or `-h`)
+  prints the usage and the environment variables it reads. Both exit 0 before stdin is
+  read, so they no longer wait for input in a terminal. Any other argument is still
+  ignored.
+- `SECURITY.md`: report a vulnerability through GitHub private vulnerability reporting.
+
+### Changed
+
+- The release workflow's smoke test also checks that `--version` prints the version
+  being released.
+- The README's `settings.json` example points at `~/.local/bin/sharkline`, where the
+  release archive and the source build install, and names `~/.cargo/bin/sharkline` for
+  `cargo install`.
+
+### Fixed
+
+- The README's source build creates `~/.local/bin` before installing into it.
+
 ## [0.1.0] - 2026-10-13
 
 First public release. sharkline is a Claude Code status line written in Rust: Claude
@@ -31,4 +53,5 @@ Code pipes its status JSON to the command on stdin, and sharkline prints a compa
   attestations. `cargo binstall --git` can use the archives too. `cargo install
   --locked --git` still builds from source.
 
+[0.2.0]: https://github.com/spicysharkco/sharkline/releases/tag/v0.2.0
 [0.1.0]: https://github.com/spicysharkco/sharkline/releases/tag/v0.1.0

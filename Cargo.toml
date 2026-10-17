@@ -1,6 +1,6 @@
 [package]
 name = "sharkline"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.89"
 description = "A fast Claude Code statusline (status line): reads the status JSON on stdin, prints a HUD layout, forks nothing on a warm render"
