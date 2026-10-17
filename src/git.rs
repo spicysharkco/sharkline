@@ -837,7 +837,7 @@ mod tests {
         }
 
         fn status_at(&self, now: f64) -> Option<Counts> {
-            self.status_timeout(now, GIT_TIMEOUT)
+            self.status_timeout(now, PATIENT)
         }
 
         fn status_timeout(&self, now: f64, timeout: Duration) -> Option<Counts> {
@@ -859,6 +859,10 @@ mod tests {
                 .unwrap();
         }
     }
+
+    /// The limit for stub runs that must finish: well past `GIT_TIMEOUT`, so a
+    /// loaded runner does not turn a slow start into a failure.
+    const PATIENT: Duration = Duration::from_secs(10);
 
     const COUNTS: Counts = Counts {
         staged: 1,
@@ -1010,13 +1014,13 @@ mod tests {
             "{:?}",
             start.elapsed()
         );
-        let again = std::time::Instant::now();
+        let ran = rig.runs();
         assert_eq!(rig.status_timeout(1001.0, Duration::from_millis(200)), None);
-        assert!(
-            again.elapsed() < Duration::from_millis(150),
-            "second call is a cache hit"
+        assert_eq!(
+            rig.runs(),
+            ran,
+            "the second call was a hit: git did not run"
         );
-        assert_eq!(rig.runs(), 1);
     }
 
     #[test]
@@ -1026,7 +1030,7 @@ mod tests {
         let repo = find(&t.0.join("repo")).unwrap();
         let got = status_via(
             &["/nonexistent/git"],
-            GIT_TIMEOUT,
+            PATIENT,
             &repo,
             repo.head().as_ref(),
             &t.join("cache"),
@@ -1051,7 +1055,7 @@ mod tests {
         let script = rig.script.to_str().unwrap();
         let got = status_via(
             &["sh", script],
-            GIT_TIMEOUT,
+            PATIENT,
             &rig.repo,
             head.as_ref(),
             &rig.t.join("blocker"),
@@ -1089,7 +1093,7 @@ mod tests {
         let run = |now: f64| {
             status_via(
                 &["sh", script.to_str().unwrap()],
-                GIT_TIMEOUT,
+                PATIENT,
                 &repo,
                 head.as_ref(),
                 &t.join("cache"),
@@ -1275,8 +1279,7 @@ mod tests {
             "git-single-flight",
             "sleep 0.5\nprintf '## main...origin/main [ahead 2, behind 1]\\n M a\\nM  b\\n?? c\\n'",
         ));
-        let patient = Duration::from_secs(10);
-        assert_eq!(rig.status_timeout(1000.0, patient), Some(COUNTS));
+        assert_eq!(rig.status_timeout(1000.0, PATIENT), Some(COUNTS));
         assert_eq!(rig.runs(), 1);
         // The entry has expired and six renders arrive at once.
         let start = Arc::new(Barrier::new(6));
@@ -1285,7 +1288,7 @@ mod tests {
                 let (rig, start) = (rig.clone(), start.clone());
                 std::thread::spawn(move || {
                     start.wait();
-                    rig.status_timeout(1040.0, patient)
+                    rig.status_timeout(1040.0, PATIENT)
                 })
             })
             .collect();
