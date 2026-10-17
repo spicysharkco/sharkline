@@ -50,7 +50,8 @@ line and always exits 0. Set it in ~/.claude/settings.json:
   \"statusLine\": { \"type\": \"command\", \"command\": \"~/.local/bin/sharkline\" }
 
 Use the path it was installed to: ~/.local/bin/sharkline for the release
-archive or a source build, ~/.cargo/bin/sharkline for cargo install.
+archive or a source build, ~/.cargo/bin/sharkline for cargo install and
+cargo binstall.
 
 Only the first argument counts: -V or --version, -h or --help. Any other
 argument is ignored.

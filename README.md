@@ -99,7 +99,8 @@ the `command` in "Configure Claude Code" below. If you use `cargo-binstall`,
 repository, reads the version from `Cargo.toml` on the default branch and downloads that
 version's archive (so it can be newer than the latest release; if that version has no
 archive, binstall builds from source). It checks neither `SHA256SUMS` nor the
-attestation.
+attestation. Like `cargo install`, it installs into cargo's bin directory
+(`$CARGO_HOME/bin`, normally `~/.cargo/bin`), so the path is `~/.cargo/bin/sharkline`.
 
 The macOS binaries are not notarised by Apple. A browser download is quarantined, and
 the flag follows the files through `tar`, `cp` and `install`, so Gatekeeper refuses to
@@ -150,7 +151,8 @@ Add a `statusLine` entry to `~/.claude/settings.json` (or a project's
 ```
 
 Use the path you installed to: `~/.local/bin/sharkline` for the release archive or a
-source build installed as above, `~/.cargo/bin/sharkline` after `cargo install`.
+source build installed as above, `~/.cargo/bin/sharkline` after `cargo install` or
+`cargo binstall`.
 
 Claude Code reloads settings on save. `padding` and `refreshInterval` are
 optional Claude Code settings; see the
