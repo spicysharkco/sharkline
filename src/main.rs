@@ -61,6 +61,7 @@ Environment:
   CLAUDE_CONFIG_DIR  where oh-my-claudecode files are read (default ~/.claude)
   OMC_PLUGIN_ROOT    oh-my-claudecode plugin root to read its version from
   XDG_CACHE_HOME     cache location when absolute (default ~/.cache)
+  HOME               ~ in CLAUDE_CONFIG_DIR and in the default paths
   SHARKLINE_NOW      Unix seconds that replace the clock, for tests
 ";
 

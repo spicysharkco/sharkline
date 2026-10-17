@@ -177,6 +177,7 @@ never fails.
 | `CLAUDE_CONFIG_DIR` | Where OMC's files are looked up (default `~/.claude`), and the source of the `profile:` segment. |
 | `OMC_PLUGIN_ROOT` | OMC plugin root to read the OMC version from. |
 | `XDG_CACHE_HOME` | Cache location (used only when absolute). Default `~/.cache`. |
+| `HOME` | What `~` means in `CLAUDE_CONFIG_DIR`, and the base of the `~/.claude` and `~/.cache` defaults. Unset or empty: those defaults are unavailable. |
 | `SHARKLINE_NOW` | Unix seconds (fractions allowed) that replace the clock: countdowns, the 30 s thinking window and the git cache age. For reproducible output and tests. An unparsable value is ignored. |
 
 ## Segments

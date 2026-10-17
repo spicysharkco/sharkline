@@ -59,6 +59,8 @@ fn help_is_usage(text: &str) {
     ] {
         assert!(text.contains(var), "{var} missing from {text}");
     }
+    // XDG_CACHE_HOME contains HOME, so only a line of its own pins it.
+    assert!(text.contains("\n  HOME "), "HOME missing from {text}");
     assert!(text.lines().count() <= 24, "{text}");
 }
 
