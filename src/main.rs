@@ -7,6 +7,11 @@
 //! worked out is dropped, not the line), nothing goes to stderr, and the exit
 //! status is always 0. It does not block either: a render still working after
 //! `WATCHDOG` prints the line the payload alone gives and exits.
+//!
+//! The one thing read from the command line is the first argument: `--version`
+//! or `-V` prints the version and `--help` or `-h` prints the usage, each before
+//! stdin is read and before the watchdog starts, and exits 0. Any other argument
+//! is ignored, because a status line must never fail.
 
 mod cache;
 mod git;
@@ -18,6 +23,7 @@ mod transcript;
 
 use render::{Facts, Opts};
 use serde_json::Value;
+use std::ffi::OsStr;
 use std::io::{self, Read, Write};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -32,12 +38,45 @@ const MAX_STDIN_BYTES: u64 = 1 << 20;
 /// status line a few seconds at most; `git` has its own, shorter limit.
 const WATCHDOG: Duration = Duration::from_millis(1500);
 
+/// What `--version` and `-V` print.
+const VERSION: &str = concat!("sharkline ", env!("CARGO_PKG_VERSION"), "\n");
+/// What `--help` and `-h` print: the usage and the variables the code reads.
+const HELP: &str = "\
+sharkline: a fast Claude Code status line.
+
+Claude Code runs it and pipes its status JSON to stdin; it prints the status
+line and always exits 0. Set it in ~/.claude/settings.json:
+
+  \"statusLine\": { \"type\": \"command\", \"command\": \"~/.local/bin/sharkline\" }
+
+Use the path it was installed to: ~/.local/bin/sharkline for the release
+archive or a source build, ~/.cargo/bin/sharkline for cargo install.
+
+Only the first argument counts: -V or --version, -h or --help. Any other
+argument is ignored.
+
+Environment:
+  NO_COLOR           set and non-empty: no ANSI escapes
+  COLUMNS            wrap lines at this width (Claude Code sets it)
+  CLAUDE_CONFIG_DIR  where oh-my-claudecode files are read (default ~/.claude)
+  OMC_PLUGIN_ROOT    oh-my-claudecode plugin root to read its version from
+  XDG_CACHE_HOME     cache location when absolute (default ~/.cache)
+  SHARKLINE_NOW      Unix seconds that replace the clock, for tests
+";
+
 /// What arrived on stdin, kept where the watchdog can find it.
 static STDIN: OnceLock<Vec<u8>> = OnceLock::new();
 /// Set by whichever of the render and the watchdog prints first.
 static PRINTED: AtomicBool = AtomicBool::new(false);
 
 fn main() {
+    if let Some(text) = info(std::env::args_os().nth(1).as_deref()) {
+        // A closed stdout is not worth failing over.
+        let mut out = io::stdout().lock();
+        let _ = out.write_all(text.as_bytes());
+        let _ = out.flush();
+        return;
+    }
     // No panic message on stderr, and no panic at all in the output: print an
     // empty line instead.
     panic::set_hook(Box::new(|_| {}));
@@ -47,6 +86,16 @@ fn main() {
     if !emit(&PRINTED, &mut io::stdout().lock(), &line) {
         // The watchdog got there first and exits the process when it is done.
         std::thread::sleep(WATCHDOG);
+    }
+}
+
+/// The text the first argument asks for in place of a render, if any. Every
+/// other argument, and none, is a render: a status line never fails on one.
+fn info(first: Option<&OsStr>) -> Option<&'static str> {
+    match first?.to_str()? {
+        "--version" | "-V" => Some(VERSION),
+        "--help" | "-h" => Some(HELP),
+        _ => None,
     }
 }
 
@@ -178,6 +227,7 @@ fn now() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::ffi::OsStrExt;
 
     const FIXTURE: &[u8] = include_bytes!("../tests/fixtures/stdin.json");
 
@@ -197,6 +247,29 @@ mod tests {
         );
         // Nothing read yet: the segments that always print.
         assert_eq!(fallback(b"", &plain()), "session:0m | ctx:[----------]0%");
+    }
+
+    #[test]
+    fn the_first_argument_asks_for_the_version_or_the_help() {
+        let arg = |s: &str| info(Some(OsStr::new(s)));
+        let version = format!("sharkline {}\n", env!("CARGO_PKG_VERSION"));
+        assert_eq!(arg("--version"), Some(version.as_str()));
+        assert_eq!(arg("-V"), Some(version.as_str()));
+        assert_eq!(arg("--help"), Some(HELP));
+        assert_eq!(arg("-h"), Some(HELP));
+        assert!(HELP.starts_with("sharkline: "));
+        assert!(HELP.contains("statusLine"));
+        assert!(HELP.lines().count() <= 24);
+    }
+
+    #[test]
+    fn any_other_argument_is_a_render() {
+        for other in ["", "--bogus", "-v", "-H", "--Version", "--version=1", " -h"] {
+            assert_eq!(info(Some(OsStr::new(other))), None, "{other:?}");
+        }
+        assert_eq!(info(None), None);
+        // Not UTF-8: still not an error.
+        assert_eq!(info(Some(OsStr::from_bytes(b"\xff"))), None);
     }
 
     #[test]

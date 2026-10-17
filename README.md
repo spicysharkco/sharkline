@@ -127,6 +127,7 @@ From source:
 git clone https://github.com/spicysharkco/sharkline
 cd sharkline
 cargo build --locked --release
+mkdir -p ~/.local/bin
 install -m 755 target/release/sharkline ~/.local/bin/
 ```
 
@@ -143,10 +144,13 @@ Add a `statusLine` entry to `~/.claude/settings.json` (or a project's
 {
   "statusLine": {
     "type": "command",
-    "command": "~/.cargo/bin/sharkline"
+    "command": "~/.local/bin/sharkline"
   }
 }
 ```
+
+Use the path you installed to: `~/.local/bin/sharkline` for the release archive or a
+source build installed as above, `~/.cargo/bin/sharkline` after `cargo install`.
 
 Claude Code reloads settings on save. `padding` and `refreshInterval` are
 optional Claude Code settings; see the
@@ -158,6 +162,11 @@ To try it without touching settings, pipe a payload in by hand:
 ```sh
 sharkline < tests/fixtures/stdin.json
 ```
+
+`sharkline --version` (or `-V`) prints the version, and `sharkline --help` (or
+`-h`) prints the usage and the environment variables it reads. Both answer
+without reading stdin. Any other argument is ignored, because a status line
+never fails.
 
 ## Environment variables
 
@@ -366,8 +375,8 @@ cargo test --locked
 ```
 
 The tests are unit tests next to the code (JSON repair, cache, git, transcript,
-layout, rendering) plus the fixture in `tests/fixtures/`. Dependencies are
-`serde_json` and `memchr`.
+layout, rendering), `tests/cli.rs`, which runs the built binary, and the fixture
+in `tests/fixtures/`. Dependencies are `serde_json` and `memchr`.
 
 ## Platform
 
