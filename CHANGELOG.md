@@ -4,6 +4,21 @@ All notable changes to sharkline are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `sharkline --help` and the README's environment table list `HOME`: it sets what `~` means
+  in `CLAUDE_CONFIG_DIR` and the base of the `~/.claude` and `~/.cache` defaults.
+- The README and `sharkline --help` name `~/.cargo/bin/sharkline` for `cargo binstall` as
+  well as `cargo install`: both install into cargo's bin directory.
+
+### Fixed
+
+- Unit tests that run a stub `git` allow it 10 s instead of 1 s, so a loaded machine no
+  longer fails them. The cache-hit test checks that the stub did not run again instead of
+  timing the call.
+
 ## [0.2.0] - 2026-10-17
 
 ### Added
@@ -53,5 +68,6 @@ Code pipes its status JSON to the command on stdin, and sharkline prints a compa
   attestations. `cargo binstall --git` can use the archives too. `cargo install
   --locked --git` still builds from source.
 
+[Unreleased]: https://github.com/spicysharkco/sharkline/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/spicysharkco/sharkline/releases/tag/v0.2.0
 [0.1.0]: https://github.com/spicysharkco/sharkline/releases/tag/v0.1.0
