@@ -1,0 +1,70 @@
+name: Bug report
+description: sharkline drew the status line wrong, or failed to draw it
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The JSON that Claude Code pipes to sharkline holds your project paths and a session
+        id, and the status line itself can show the git branch, the worktree and profile
+        names, and skill arguments. Replace or crop them if you prefer;
+        [`tests/fixtures/stdin.json`](https://github.com/spicysharkco/sharkline/blob/main/tests/fixtures/stdin.json)
+        shows the JSON shape with placeholders. A security problem goes to
+        [private vulnerability reporting](https://github.com/spicysharkco/sharkline/security/policy)
+        instead.
+  - type: input
+    id: version
+    attributes:
+      label: sharkline version
+      description: The output of `sharkline --version`.
+      placeholder: sharkline 0.2.1
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS, Apple silicon
+        - macOS, Intel
+        - Linux, x86_64
+        - Linux, arm64
+        - Other (say which below)
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installed from
+      options:
+        - Release archive
+        - cargo binstall
+        - Source build or cargo install
+        - Other (say which below)
+    validations:
+      required: true
+  - type: input
+    id: claude-version
+    attributes:
+      label: Claude Code version
+      description: The output of `claude --version`.
+    validations:
+      required: true
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal and font
+      description: Colors and symbols depend on these, for example "iTerm2, JetBrains Mono".
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+      description: What the line showed (a screenshot helps) and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: payload
+    attributes:
+      label: Input that shows it
+      description: A JSON payload that reproduces it with `sharkline < payload.json`, if you have one.
+      render: json
