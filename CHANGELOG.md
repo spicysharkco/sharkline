@@ -6,6 +6,8 @@ All notable changes to sharkline are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-19
+
 ### Changed
 
 - `sharkline --help` and the README's environment table list `HOME`: it sets what `~` means
@@ -68,6 +70,7 @@ Code pipes its status JSON to the command on stdin, and sharkline prints a compa
   attestations. `cargo binstall --git` can use the archives too. `cargo install
   --locked --git` still builds from source.
 
-[Unreleased]: https://github.com/spicysharkco/sharkline/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/spicysharkco/sharkline/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/spicysharkco/sharkline/releases/tag/v0.2.1
 [0.2.0]: https://github.com/spicysharkco/sharkline/releases/tag/v0.2.0
 [0.1.0]: https://github.com/spicysharkco/sharkline/releases/tag/v0.1.0
