@@ -12,6 +12,11 @@ context usage, session time and tool/agent counts.
 A warm render takes about 1.3 ms, starts no other process, and touches no
 network.
 
+![sharkline output: a working session, then the same session near its limits](assets/sample.svg)
+
+(Rendered from a demo repository, transcript and payload. Emoji take the
+terminal's emoji font.)
+
 Unofficial; not affiliated with Anthropic or the oh-my-claudecode project.
 
 ## Why
