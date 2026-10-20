@@ -6,6 +6,8 @@ All notable changes to sharkline are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-20
+
 ### Added
 
 - A `cache:` segment after `ctx:`, from the payload's `prompt_cache`: the time left before a
@@ -92,7 +94,8 @@ Code pipes its status JSON to the command on stdin, and sharkline prints a compa
   attestations. `cargo binstall --git` can use the archives too. `cargo install
   --locked --git` still builds from source.
 
-[Unreleased]: https://github.com/spicysharkco/sharkline/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/spicysharkco/sharkline/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/spicysharkco/sharkline/releases/tag/v0.3.0
 [0.2.1]: https://github.com/spicysharkco/sharkline/releases/tag/v0.2.1
 [0.2.0]: https://github.com/spicysharkco/sharkline/releases/tag/v0.2.0
 [0.1.0]: https://github.com/spicysharkco/sharkline/releases/tag/v0.1.0

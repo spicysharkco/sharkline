@@ -78,16 +78,16 @@ the archive for your system and the `SHA256SUMS` file:
 | Linux, ARM64 | `sharkline-VERSION-aarch64-unknown-linux-musl.tar.gz` |
 
 The Linux binaries are statically linked, so they run on any distribution. Check the
-archive, unpack it and put the binary on your `PATH`. The example is version 0.2.1 for
+archive, unpack it and put the binary on your `PATH`. The example is version 0.3.0 for
 Apple silicon; set `a` to the archive name for your version and system from the table
 above, without `.tar.gz`:
 
 ```sh
-a=sharkline-0.2.1-aarch64-apple-darwin
+a=sharkline-0.3.0-aarch64-apple-darwin
 grep -F " $a.tar.gz" SHA256SUMS | shasum -a 256 -c -
 gh attestation verify "$a.tar.gz" --repo spicysharkco/sharkline \
   --signer-workflow spicysharkco/sharkline/.github/workflows/release.yml \
-  --source-ref refs/tags/v0.2.1
+  --source-ref refs/tags/v0.3.0
 tar -xzf "$a.tar.gz"
 xattr -dr com.apple.quarantine "$a"
 mkdir -p ~/.local/bin
