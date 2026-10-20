@@ -44,6 +44,19 @@ const MAX_LINES: usize = 4;
 const TEXT_MAX_CHARS: usize = 64;
 /// A reset further away than this is a bad value, not a countdown.
 const MAX_RESET_AHEAD_SECS: f64 = 366.0 * 86_400.0;
+/// The longest prompt cache lifetime is an hour; an expiry further out than
+/// that, plus a minute of slack, is not a real one and gets no countdown.
+const CACHE_MAX_AHEAD_SECS: f64 = 3600.0 + 60.0;
+/// A cache miss longer ago than this is shown dim instead of yellow.
+const MISS_FRESH_SECS: f64 = 300.0;
+/// A miss count past this is shown as `999+`, to bound the width.
+const MISSES_MAX: u64 = 999;
+/// Cause names shown for the last cache miss; the rest are counted (`+2`).
+const MISS_CAUSES_SHOWN: usize = 2;
+/// A token count or dollar amount from here up is a bad value and is left out.
+const AMOUNT_MAX: f64 = 1e9;
+/// A spend percentage past this is shown as this, to bound the width.
+const SPEND_MAX_PCT: f64 = 999.0;
 const SKILL_ARGS_WIDTH: usize = 15;
 const MODEL_FALLBACK_WIDTH: usize = 20;
 
@@ -94,10 +107,12 @@ pub fn render(input: &Value, f: &Facts, o: &Opts) -> String {
         model(input, o),
         claude_label(input, f, o),
         quotas(input, o),
+        spend(input, o),
         thinking(f, o),
         Some(session(input, ctx, o)),
         last_skill(f, o),
         Some(context_segment(ctx, o)),
+        prompt_cache(input, o),
         call_counts(f),
     ];
     let detail = [context_notice(ctx, o)]
@@ -105,25 +120,24 @@ pub fn render(input: &Value, f: &Facts, o: &Opts) -> String {
         .chain(update_hints(input, f, o));
 
     let join = |segments: Vec<String>| (!segments.is_empty()).then(|| segments.join(&sep));
-    let lines: Vec<String> = [
+    let separators = [sep.as_str(), " | "];
+    let fit = |l: String| {
+        if o.columns > 0 {
+            layout::wrap_line(&l, o.columns, separators)
+        } else {
+            vec![l]
+        }
+    };
+    let head: Vec<String> = [
         join(git_line.into_iter().flatten().collect()),
         join(main_line.into_iter().flatten().collect()),
     ]
     .into_iter()
     .flatten()
-    .chain(detail.flatten())
+    .flat_map(fit)
     .collect();
-
-    let lines = if o.columns > 0 {
-        let separators = [sep.as_str(), " | "];
-        lines
-            .iter()
-            .flat_map(|l| layout::wrap_line(l, o.columns, separators))
-            .collect()
-    } else {
-        lines
-    };
-    let lines = layout::limit_lines(lines, MAX_LINES);
+    let tail: Vec<String> = detail.flatten().flat_map(fit).collect();
+    let lines = layout::limit_lines(head, tail, MAX_LINES);
     lines
         .iter()
         .map(|l| {
@@ -471,7 +485,53 @@ fn quota(input: &Value, key: &str, label: &str, dim_label: bool, o: &Opts) -> Op
     ))
 }
 
-/// 5-hour and weekly quota, space-joined; either may be absent.
+/// `spend:[#####---]63%(5d2h) $314.12/$500`: the spend limit a Claude apps
+/// gateway sets. The percentage passes 100 once the limit is exceeded, while
+/// the bar stops full. The dollars arrive later than the percentage and only
+/// show when both amounts are present. A segment of its own, not part of
+/// `quotas`, so a narrow terminal wraps before it instead of cutting the
+/// dollars short.
+fn spend(input: &Value, o: &Opts) -> Option<String> {
+    let limit = input.pointer("/rate_limits/spend_limit")?;
+    let used = limit.get("used_percentage")?.as_f64()?;
+    let shown = used.round().clamp(0.0, SPEND_MAX_PCT) as u16;
+    let p = shown.min(100) as u8;
+    let color = quota_color(p);
+    let reset = countdown(limit.get("resets_at"), o.now)
+        .map(|r| paint(o, DIM, &format!("({r})")))
+        .unwrap_or_default();
+    let dollars = match (usd(limit.get("used_usd")), usd(limit.get("limit_usd"))) {
+        (Some(used), Some(limit)) if limit > 0.0 => {
+            paint(o, DIM, &format!(" ${}/${}", cents(used), cents(limit)))
+        }
+        _ => String::new(),
+    };
+    Some(format!(
+        "{}{}{}{reset}{dollars}",
+        paint(o, DIM, "spend:"),
+        bar(p, QUOTA_BAR_WIDTH, color, o),
+        paint(o, color, &format!("{shown}%")),
+    ))
+}
+
+/// A dollar amount rounded to the cent. `None` when not a number, or when
+/// it rounds to below zero or to a billion or more.
+fn usd(v: Option<&Value>) -> Option<f64> {
+    let n = (v?.as_f64()? * 100.0).round() / 100.0;
+    // abs() turns -0 into 0, which would otherwise print as `-0`.
+    (0.0..AMOUNT_MAX).contains(&n).then_some(n.abs())
+}
+
+/// `500` when whole, else two decimals (`314.12`).
+fn cents(n: f64) -> String {
+    if n.fract() == 0.0 {
+        format!("{n:.0}")
+    } else {
+        format!("{n:.2}")
+    }
+}
+
+/// 5-hour and weekly quotas, space-joined; either may be absent.
 fn quotas(input: &Value, o: &Opts) -> Option<String> {
     let parts: Vec<String> = [
         quota(input, "five_hour", "5h", false, o),
@@ -534,6 +594,91 @@ fn context_segment(p: u8, o: &Opts) -> String {
         bar(p, CTX_BAR_WIDTH, color, o),
         paint(o, color, &format!("{p}%{suffix}"))
     )
+}
+
+/// `cache:4m` while the prompt cache is warm, with the time left before it goes
+/// cold (yellow seconds in the last minute, `warm` when no expiry is given);
+/// `cache:cold(45k)` once it is cold, with the tokens the next request writes
+/// to the cache again; then `miss:2(tools_changed)` when requests re-processed
+/// content the cache held, with the cause Claude Code gave for the last one.
+/// Left out until a response this session reported cache tokens.
+fn prompt_cache(input: &Value, o: &Opts) -> Option<String> {
+    let c = input.get("prompt_cache")?;
+    if c.get("caching_observed") != Some(&Value::Bool(true)) {
+        return None;
+    }
+    let ahead = c
+        .get("expires_at")
+        .and_then(reset_secs)
+        .map(|at| at - o.now);
+    let warm = c.get("warm") == Some(&Value::Bool(true)) && ahead.is_none_or(|a| a > 0.0);
+    let state = if warm {
+        match ahead.filter(|a| *a <= CACHE_MAX_AHEAD_SECS) {
+            Some(a) if a < 60.0 => paint(o, YELLOW, &format!("{}s", (a as u64).max(1))),
+            Some(a) => paint(o, GREEN, &format!("{}m", (a / 60.0) as u64)),
+            None => paint(o, GREEN, "warm"),
+        }
+    } else {
+        let recache = c
+            .get("recache_tokens_if_cold")
+            .and_then(Value::as_f64)
+            .filter(|n| (1.0..AMOUNT_MAX).contains(n))
+            .map(|n| paint(o, DIM, &format!("({})", tokens(n))))
+            .unwrap_or_default();
+        format!("{}{recache}", paint(o, YELLOW, "cold"))
+    };
+    let misses = c
+        .get("misses")
+        .and_then(Value::as_u64)
+        .filter(|n| *n > 0)
+        .map(|n| format!(" {}", cache_misses(c, n, o)))
+        .unwrap_or_default();
+    Some(format!("cache:{state}{misses}"))
+}
+
+/// `miss:2(tools_changed)`: the session's miss count, then the causes of the
+/// last miss, whole names only (`a,b+1` past two). Yellow while the last miss
+/// is under five minutes old or its time is unknown, dim after that.
+fn cache_misses(c: &Value, n: u64, o: &Opts) -> String {
+    let count = if n > MISSES_MAX {
+        format!("{MISSES_MAX}+")
+    } else {
+        n.to_string()
+    };
+    let fresh = c
+        .get("last_miss_at")
+        .and_then(reset_secs)
+        .is_none_or(|at| o.now - at <= MISS_FRESH_SECS);
+    let causes: Vec<String> = c
+        .pointer("/last_miss_cause/causes")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|v| text(Some(v))).collect())
+        .unwrap_or_default();
+    let cause = match causes.len() {
+        0 => String::new(),
+        len => {
+            let shown = len.min(MISS_CAUSES_SHOWN);
+            let more = if len > shown {
+                format!("+{}", len - shown)
+            } else {
+                String::new()
+            };
+            paint(o, DIM, &format!("({}{more})", causes[..shown].join(",")))
+        }
+    };
+    let color = if fresh { YELLOW } else { DIM };
+    format!("{}{cause}", paint(o, color, &format!("miss:{count}")))
+}
+
+/// A token count in a few columns: `950`, `45k`, `1.2M`.
+fn tokens(n: f64) -> String {
+    if n < 1000.0 {
+        format!("{}", n as u64)
+    } else if n < 999_500.0 {
+        format!("{}k", (n / 1000.0).round() as u64)
+    } else {
+        format!("{}M", (n / 100_000.0).round() / 10.0)
+    }
 }
 
 /// `session:1283m`, colored by health: yellow past 60 min or 70% context, red
@@ -898,6 +1043,88 @@ mod tests {
             Some("wk:[--------]5%")
         );
         assert_eq!(quotas(&json!({}), &plain()), None);
+    }
+
+    #[test]
+    fn spend_shows_the_percentage_past_the_limit_and_dollars_once_both_arrive() {
+        let at = |s: Value| spend(&json!({"rate_limits": {"spend_limit": s}}), &plain());
+        assert_eq!(
+            at(json!({"used_percentage": 63, "resets_at": NOW + 6060.0})).as_deref(),
+            Some("spend:[#####---]63%(1h41m)")
+        );
+        assert_eq!(
+            at(json!({"used_percentage": 63, "used_usd": 314.12, "limit_usd": 500})).as_deref(),
+            Some("spend:[#####---]63% $314.12/$500")
+        );
+        // The dollars come from a separate request; one alone is not shown.
+        assert_eq!(
+            at(json!({"used_percentage": 63, "used_usd": 314.12})).as_deref(),
+            Some("spend:[#####---]63%")
+        );
+        // Bad amounts drop the dollars: negative, so large they would flood the
+        // line (also once rounded up to a billion), or a limit of nothing.
+        for (used, limit) in [
+            (json!(-1), json!(500)),
+            (json!(1e300), json!(500)),
+            (json!(1), json!(1e9)),
+            (json!(1), json!(999_999_999.999)),
+            (json!(0), json!(0)),
+            (json!(5), json!(0.001)),
+        ] {
+            assert_eq!(
+                at(json!({"used_percentage": 63, "used_usd": used, "limit_usd": limit})).as_deref(),
+                Some("spend:[#####---]63%"),
+                "{used} {limit}"
+            );
+        }
+        // Rounded to the cent before deciding whether it is whole; -0 prints as 0.
+        assert_eq!(
+            at(json!({"used_percentage": 63, "used_usd": 314.999, "limit_usd": 499.995}))
+                .as_deref(),
+            Some("spend:[#####---]63% $315/$500")
+        );
+        assert_eq!(
+            at(json!({"used_percentage": 0, "used_usd": -0.0, "limit_usd": 500})).as_deref(),
+            Some("spend:[--------]0% $0/$500")
+        );
+        // Over the limit: a clamped 100% would hide by how much.
+        assert_eq!(
+            at(json!({"used_percentage": 112.4})).as_deref(),
+            Some("spend:[########]112%")
+        );
+        assert_eq!(
+            at(json!({"used_percentage": 1e9})).as_deref(),
+            Some("spend:[########]999%")
+        );
+        assert_eq!(
+            at(json!({"used_percentage": -3})).as_deref(),
+            Some("spend:[--------]0%")
+        );
+        for bad in [
+            json!({"used_percentage": "63"}),
+            json!({"resets_at": NOW + 60.0}),
+            json!(63),
+            json!(null),
+        ] {
+            assert_eq!(at(bad.clone()), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn spend_colors_follow_the_quota_levels() {
+        let input = json!({"rate_limits": {"spend_limit": {
+            "used_percentage": 120, "used_usd": 600, "limit_usd": 500}}});
+        assert_eq!(
+            spend(&input, &color()).as_deref(),
+            Some(
+                "\x1b[2mspend:\x1b[0m[\x1b[31m########\x1b[2m\x1b[0m]\x1b[31m120%\x1b[0m\x1b[2m $600/$500\x1b[0m"
+            )
+        );
+        for (pct, want) in [(69, GREEN), (70, YELLOW), (89, YELLOW), (90, RED)] {
+            let input = json!({"rate_limits": {"spend_limit": {"used_percentage": pct}}});
+            let got = spend(&input, &color()).unwrap();
+            assert!(got.contains(&format!("{want}{pct}%")), "{pct}: {got:?}");
+        }
     }
 
     // ---- model ----
@@ -1398,6 +1625,209 @@ mod tests {
         );
     }
 
+    // ---- prompt cache ----
+
+    fn cache(fields: Value) -> Option<String> {
+        cache_with(fields, &plain())
+    }
+
+    fn cache_with(fields: Value, o: &Opts) -> Option<String> {
+        let mut c = json!({"caching_observed": true, "warm": true});
+        for (k, v) in fields.as_object().unwrap() {
+            c[k] = v.clone();
+        }
+        prompt_cache(&json!({ "prompt_cache": c }), o)
+    }
+
+    #[test]
+    fn prompt_cache_counts_down_while_warm() {
+        for (ahead, want) in [
+            (272.0, "cache:4m"),
+            (60.0, "cache:1m"),
+            (3599.0, "cache:59m"),
+            (3600.0, "cache:60m"),
+            (3660.0, "cache:61m"),
+            (3661.0, "cache:warm"),
+            (42.7, "cache:42s"),
+            (0.3, "cache:1s"),
+        ] {
+            assert_eq!(
+                cache(json!({"expires_at": NOW + ahead})).as_deref(),
+                Some(want),
+                "{ahead}"
+            );
+        }
+        // A real epoch, so that the expiry in milliseconds is past 1e12.
+        let now = 1_750_000_000.0;
+        let o = Opts { now, ..plain() };
+        assert_eq!(
+            cache_with(json!({"expires_at": (now + 272.0) * 1000.0}), &o).as_deref(),
+            Some("cache:4m")
+        );
+    }
+
+    #[test]
+    fn prompt_cache_without_a_usable_expiry_reads_warm() {
+        for expires in [json!(null), json!("soon"), json!(NOW + 3.0 * 3600.0)] {
+            assert_eq!(
+                cache(json!({"expires_at": expires})).as_deref(),
+                Some("cache:warm"),
+                "{expires}"
+            );
+        }
+        assert_eq!(cache(json!({})).as_deref(), Some("cache:warm"));
+    }
+
+    #[test]
+    fn prompt_cache_reads_cold_once_expired_or_not_warm() {
+        // The payload can be older than the expiry: an idle session's last
+        // render still says warm.
+        for expires in [NOW, NOW - 5.0] {
+            assert_eq!(
+                cache(json!({"expires_at": expires})).as_deref(),
+                Some("cache:cold"),
+                "{expires}"
+            );
+        }
+        for warm in [json!(false), json!("true"), json!(null)] {
+            assert_eq!(
+                cache(json!({"warm": warm, "expires_at": NOW + 272.0})).as_deref(),
+                Some("cache:cold"),
+                "{warm}"
+            );
+        }
+        assert_eq!(
+            cache(json!({"warm": false, "recache_tokens_if_cold": 45000})).as_deref(),
+            Some("cache:cold(45k)")
+        );
+        for recache in [json!(null), json!(0), json!("45000")] {
+            assert_eq!(
+                cache(json!({"warm": false, "recache_tokens_if_cold": recache})).as_deref(),
+                Some("cache:cold"),
+                "{recache}"
+            );
+        }
+        // The re-cache cost is for a cold cache only.
+        assert_eq!(
+            cache(json!({"expires_at": NOW + 272.0, "recache_tokens_if_cold": 45000})).as_deref(),
+            Some("cache:4m")
+        );
+    }
+
+    #[test]
+    fn prompt_cache_left_out_unless_caching_was_observed() {
+        for observed in [json!(false), json!("true"), json!(1), json!(null)] {
+            assert_eq!(
+                cache(json!({"caching_observed": observed})),
+                None,
+                "{observed}"
+            );
+        }
+        for input in [
+            json!({}),
+            json!({"prompt_cache": null}),
+            json!({"prompt_cache": true}),
+            json!({"prompt_cache": {"warm": true}}),
+        ] {
+            assert_eq!(prompt_cache(&input, &plain()), None, "{input}");
+        }
+    }
+
+    #[test]
+    fn prompt_cache_misses_name_the_last_cause() {
+        let tools = json!({"causes": ["tools_changed"], "tools_added": 2, "tools_removed": 0});
+        assert_eq!(
+            cache(json!({"misses": 2, "last_miss_cause": tools, "expires_at": NOW + 272.0}))
+                .as_deref(),
+            Some("cache:4m miss:2(tools_changed)")
+        );
+        assert_eq!(
+            cache(json!({"misses": 1, "last_miss_cause": null, "warm": false})).as_deref(),
+            Some("cache:cold miss:1")
+        );
+        assert_eq!(
+            cache(json!({"misses": 3, "last_miss_cause": {"causes": ["model_changed", 7, "\u{1b}[31mtools_changed"]}}))
+                .as_deref(),
+            Some("cache:warm miss:3(model_changed,[31mtools_changed)")
+        );
+        // Whole names only: two, then a count of the rest.
+        let five = json!({"causes": ["tools_changed", "system_prompt_changed", "ttl_expired_5m", "a", "b"]});
+        assert_eq!(
+            cache(json!({"misses": 2, "last_miss_cause": five})).as_deref(),
+            Some("cache:warm miss:2(tools_changed,system_prompt_changed+3)")
+        );
+        let long = "x".repeat(100);
+        let got = cache(json!({"misses": 1, "last_miss_cause": {"causes": [long]}})).unwrap();
+        assert_eq!(got, format!("cache:warm miss:1({})", "x".repeat(64)));
+        for (misses, want) in [
+            (999, "cache:warm miss:999"),
+            (1000, "cache:warm miss:999+"),
+            (u64::MAX, "cache:warm miss:999+"),
+        ] {
+            assert_eq!(
+                cache(json!({ "misses": misses })).as_deref(),
+                Some(want),
+                "{misses}"
+            );
+        }
+        for misses in [json!(0), json!(-1), json!("2"), json!(2.5), json!(null)] {
+            assert_eq!(
+                cache(json!({"misses": misses, "last_miss_cause": tools})).as_deref(),
+                Some("cache:warm"),
+                "{misses}"
+            );
+        }
+    }
+
+    #[test]
+    fn prompt_cache_colors() {
+        assert_eq!(
+            cache_with(json!({"expires_at": NOW + 272.0}), &color()).as_deref(),
+            Some("cache:\x1b[32m4m\x1b[0m")
+        );
+        assert_eq!(
+            cache_with(json!({"expires_at": NOW + 42.0}), &color()).as_deref(),
+            Some("cache:\x1b[33m42s\x1b[0m")
+        );
+        let cold = json!({"warm": false, "recache_tokens_if_cold": 45000, "misses": 2,
+            "last_miss_cause": {"causes": ["ttl_expired_5m"]}});
+        let got = cache_with(cold.clone(), &color()).unwrap();
+        assert_eq!(
+            got,
+            "cache:\x1b[33mcold\x1b[0m\x1b[2m(45k)\x1b[0m \x1b[33mmiss:2\x1b[0m\x1b[2m(ttl_expired_5m)\x1b[0m"
+        );
+        assert_eq!(strip_ansi(&got), cache(cold).unwrap());
+        // A miss more than five minutes old is dim; a recent one stays yellow.
+        let at = |ago: f64| {
+            cache_with(json!({"misses": 1, "last_miss_at": NOW - ago}), &color()).unwrap()
+        };
+        assert_eq!(at(300.0), "cache:\x1b[32mwarm\x1b[0m \x1b[33mmiss:1\x1b[0m");
+        assert_eq!(at(301.0), "cache:\x1b[32mwarm\x1b[0m \x1b[2mmiss:1\x1b[0m");
+    }
+
+    #[test]
+    fn token_counts_fit_a_few_columns() {
+        for (n, want) in [
+            (950.0, "950"),
+            (999.6, "999"),
+            (1000.0, "1k"),
+            (45_000.0, "45k"),
+            (999_499.0, "999k"),
+            (999_500.0, "1M"),
+            (1_234_567.0, "1.2M"),
+        ] {
+            assert_eq!(tokens(n), want, "{n}");
+        }
+        // A billion or more is a bad value, not a count to print in full.
+        for n in [1e9, 1e300] {
+            assert_eq!(
+                cache(json!({"warm": false, "recache_tokens_if_cold": n})).as_deref(),
+                Some("cache:cold"),
+                "{n}"
+            );
+        }
+    }
+
     // ---- session, thinking, skill, counts ----
 
     #[test]
@@ -1615,13 +2045,33 @@ mod tests {
             "effort": {"level": null},
             "thinking": {"enabled": "yes"},
             "context_window": {"used_percentage": "lots"},
-            "rate_limits": {"five_hour": {"used_percentage": "78"}, "seven_day": {"used_percentage": 73}},
+            "rate_limits": {"five_hour": {"used_percentage": "78"}, "seven_day": {"used_percentage": 73},
+                "spend_limit": {"used_percentage": "63"}},
             "cost": {"total_duration_ms": "long"},
+            "prompt_cache": {"caching_observed": "yes", "warm": true},
         });
         assert_eq!(
             render(&input, &facts(), &plain()),
             "wk:[######--]73% | session:0m | ctx:[----------]0%"
         );
+    }
+
+    #[test]
+    fn cache_follows_ctx_and_spend_follows_the_quotas() {
+        let mut input = full_input();
+        input["rate_limits"]["spend_limit"] = json!({"used_percentage": 12});
+        input["prompt_cache"] =
+            json!({"caching_observed": true, "warm": true, "expires_at": NOW + 272.0});
+        let got = render(&input, &full_facts(), &plain());
+        assert!(
+            got.contains("wk:[######--]73%(6d5h) | spend:[#-------]12% | thinking"),
+            "{got}"
+        );
+        assert!(
+            got.contains("ctx:[###-------]28% | cache:4m | \u{1f527}251"),
+            "{got}"
+        );
+        assert_eq!(strip_ansi(&render(&input, &full_facts(), &color())), got);
     }
 
     #[test]
@@ -1653,6 +2103,31 @@ mod tests {
     }
 
     #[test]
+    fn a_wrapped_main_line_keeps_ctx_and_the_notice_gives_way() {
+        // At 80 columns the git and main lines fill all four rows. The notice
+        // used to push the last row, with `ctx:`, behind `... (+2 lines)`.
+        let mut input = full_input();
+        input["context_window"] = json!({"used_percentage": 89});
+        let mut f = full_facts();
+        f.updates = updates(None, false, None);
+        let o = |columns| Opts {
+            color: false,
+            now: NOW,
+            columns,
+        };
+        let got = render(&input, &f, &o(80));
+        let lines: Vec<&str> = got.lines().collect();
+        assert_eq!(lines.len(), 4, "{got}");
+        assert_eq!(lines[3], "ctx:[#########-]89% CRITICAL | 🔧251 🤖4");
+        // With a row to spare, the notice is back.
+        let got = render(&input, &f, &o(100));
+        assert_eq!(
+            got.lines().last(),
+            Some("[!] ctx 89% >= 80% threshold - run /compact")
+        );
+    }
+
+    #[test]
     fn narrow_terminal_wraps_at_separators_and_never_exceeds_the_width() {
         let o = |columns| Opts {
             color: false,
@@ -1675,6 +2150,26 @@ mod tests {
                 assert!(layout::width(line) <= cols.max(3), "{cols}: {line:?}");
             }
         }
+    }
+
+    #[test]
+    fn spend_wraps_whole_instead_of_losing_its_dollars() {
+        let input = json!({"rate_limits": {
+            "five_hour": {"used_percentage": 40, "resets_at": NOW + 8400.0},
+            "seven_day": {"used_percentage": 70, "resets_at": NOW + 500_000.0},
+            "spend_limit": {"used_percentage": 63, "resets_at": NOW + 500_000.0,
+                "used_usd": 314.12, "limit_usd": 500}}});
+        let o = Opts {
+            color: false,
+            now: NOW,
+            columns: 80,
+        };
+        let got = render(&input, &facts(), &o);
+        assert!(
+            got.lines()
+                .any(|l| l.starts_with("spend:[#####---]63%(5d18h) $314.12/$500 | ")),
+            "{got}"
+        );
     }
 
     #[test]

@@ -245,7 +245,7 @@ mod tests {
     fn the_fallback_is_the_payload_alone() {
         assert_eq!(
             fallback(FIXTURE, &plain()),
-            "Model: Opus 5.5 xhigh | 5h:[####----]55%(2h20m) wk:[#######-]88%(6d6h) | session:95m | ctx:[###-------]30%"
+            "Model: Opus 5.5 xhigh | 5h:[####----]55%(2h20m) wk:[#######-]88%(6d6h) | session:95m | ctx:[###-------]30% | cache:42m"
         );
         // Nothing read yet: the segments that always print.
         assert_eq!(fallback(b"", &plain()), "session:0m | ctx:[----------]0%");

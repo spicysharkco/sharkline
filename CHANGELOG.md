@@ -6,6 +6,28 @@ All notable changes to sharkline are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A `cache:` segment after `ctx:`, from the payload's `prompt_cache`: the time left before a
+  warm prompt cache expires (`cache:4m`, yellow seconds in the last minute), or `cache:cold`
+  with the tokens the next request writes to the cache again (`cache:cold(45k)`); then
+  `miss:N` with the causes Claude Code gave for the last miss, yellow for five minutes and
+  dim after. It is left out until a response reports cache tokens, and reads `cold` once
+  `expires_at` has passed even if the payload still says warm.
+- A `spend:` segment after the `5h:` and `wk:` quotas, from `rate_limits.spend_limit` behind a
+  Claude apps gateway: bar, percentage (past 100 once the limit is exceeded), reset countdown,
+  and `$used/$limit` once the gateway reports both amounts. A narrow terminal wraps before
+  it rather than cutting the amounts short.
+- The README explains `refreshInterval`: without it an idle session's countdowns stand still.
+
+### Changed
+
+- When the git and main lines wrap to fill all four lines, the context notice and update
+  hints are left out. Before, the `... (+N lines)` note took the fourth line and hid the
+  end of the main line, `ctx:` included.
+- The sample fixture carries a `prompt_cache` object and a current `version`.
+- Documentation links point to `code.claude.com`.
+
 ## [0.2.1] - 2026-10-19
 
 ### Changed

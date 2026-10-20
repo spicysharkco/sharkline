@@ -179,10 +179,18 @@ pub fn wrap_line(line: &str, max: usize, separators: [&str; 2]) -> Vec<String> {
     wrapped
 }
 
-/// At most `limit` lines: the first `limit - 1`, then a note of how many were cut
-/// (the note itself takes the last slot).
-pub fn limit_lines(mut lines: Vec<String>, limit: usize) -> Vec<String> {
+/// At most `limit` lines of `head` then `tail`: the first `limit - 1`, then a
+/// note of how many were cut (the note itself takes the last slot). The tail
+/// gives way first: when the head fills every slot exactly, the tail is left
+/// out without a note, so the note never takes the place of a head line just
+/// to count tail lines.
+pub fn limit_lines(head: Vec<String>, tail: Vec<String>, limit: usize) -> Vec<String> {
     let limit = limit.max(1);
+    if head.len() == limit {
+        return head;
+    }
+    let mut lines = head;
+    lines.extend(tail);
     if lines.len() <= limit {
         return lines;
     }
@@ -288,10 +296,37 @@ mod tests {
     #[test]
     fn limit_lines_keeps_the_head_and_counts_the_cut() {
         let v = |n: usize| (1..=n).map(|i| i.to_string()).collect::<Vec<_>>();
-        assert_eq!(limit_lines(v(4), 4), v(4));
-        assert_eq!(limit_lines(v(5), 4), ["1", "2", "3", "... (+2 lines)"]);
-        assert_eq!(limit_lines(v(7), 4), ["1", "2", "3", "... (+4 lines)"]);
-        assert_eq!(limit_lines(v(3), 0), ["... (+3 lines)"]);
-        assert_eq!(limit_lines(vec![], 4), Vec::<String>::new());
+        let none = Vec::<String>::new;
+        assert_eq!(limit_lines(v(4), none(), 4), v(4));
+        assert_eq!(
+            limit_lines(v(5), none(), 4),
+            ["1", "2", "3", "... (+2 lines)"]
+        );
+        assert_eq!(
+            limit_lines(v(7), none(), 4),
+            ["1", "2", "3", "... (+4 lines)"]
+        );
+        assert_eq!(limit_lines(v(3), none(), 0), ["... (+3 lines)"]);
+        assert_eq!(limit_lines(none(), none(), 4), none());
+        // The tail fills free slots, and the note counts it when it overflows.
+        let tail = || vec!["a".to_string(), "b".to_string()];
+        assert_eq!(limit_lines(v(2), tail(), 4), ["1", "2", "a", "b"]);
+        assert_eq!(
+            limit_lines(v(3), tail(), 4),
+            ["1", "2", "3", "... (+2 lines)"]
+        );
+        assert_eq!(
+            limit_lines(v(5), tail(), 4),
+            ["1", "2", "3", "... (+4 lines)"]
+        );
+    }
+
+    #[test]
+    fn limit_lines_drops_the_tail_before_cutting_a_full_head() {
+        // A context notice under a main line that wraps to fill the cap: the
+        // note would replace the main line's last row, hiding `ctx:`.
+        let v = |n: usize| (1..=n).map(|i| i.to_string()).collect::<Vec<_>>();
+        assert_eq!(limit_lines(v(4), vec!["notice".into()], 4), v(4));
+        assert_eq!(limit_lines(v(1), vec!["notice".into()], 1), v(1));
     }
 }

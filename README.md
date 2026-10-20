@@ -4,10 +4,10 @@
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)](LICENSE)
 
 A fast Claude Code statusline: a status line for
-[Claude Code](https://docs.claude.com/en/docs/claude-code/overview), written in
+[Claude Code](https://code.claude.com/docs/en/overview), written in
 Rust. Claude Code pipes a JSON payload to the command on stdin; this
 binary prints a compact HUD: git branch and counts, model, rate-limit bars,
-context usage, session time and tool/agent counts.
+context usage, prompt cache state, session time and tool/agent counts.
 
 A warm render takes about 1.3 ms, starts no other process, and touches no
 network.
@@ -22,7 +22,7 @@ Unofficial; not affiliated with Anthropic or the oh-my-claudecode project.
 ## Why
 
 Claude Code runs the status line command again as a session goes on; the
-[status line documentation](https://docs.claude.com/en/docs/claude-code/statusline)
+[status line documentation](https://code.claude.com/docs/en/statusline)
 says when. A status line written for Node, Python or a shell script with `jq`
 and `git` pays for a process start (or several) on every one of those renders. On the
 machine used for the numbers below, a Node process that does nothing
@@ -50,7 +50,7 @@ SHARKLINE_NOW=1750000000 sharkline < tests/fixtures/stdin.json
 ```
 
 ```text
-Model: Opus 5.5 xhigh | 5h:[####----]55%(2h20m) wk:[#######-]88%(6d6h) | session:95m | ctx:[###-------]30%
+Model: Opus 5.5 xhigh | 5h:[####----]55%(2h20m) wk:[#######-]88%(6d6h) | session:95m | ctx:[###-------]30% | cache:42m
 ```
 
 (No OMC installed, so there are no OMC segments or update hints. The fixture's
@@ -58,7 +58,9 @@ directory does not exist, so there is no git line. The real output is
 colored; `NO_COLOR=1` removes the escapes.)
 
 At most four lines are printed, wrapped at ` | ` to `COLUMNS` (Claude Code sets
-it for the command). Anything beyond four lines becomes `... (+N lines)`.
+it for the command). Anything beyond four lines becomes `... (+N lines)`, except
+that the notices give way first: when the git and main lines fill all four,
+the notices are left out instead of hiding the last of them.
 
 ## Install
 
@@ -161,8 +163,15 @@ source build installed as above, `~/.cargo/bin/sharkline` after `cargo install` 
 
 Claude Code reloads settings on save. `padding` and `refreshInterval` are
 optional Claude Code settings; see the
-[status line documentation](https://docs.claude.com/en/docs/claude-code/statusline).
+[status line documentation](https://code.claude.com/docs/en/statusline).
 To go back, delete the `statusLine` entry.
+
+Claude Code runs the command when something happens: a new message, a
+permission mode change, a rate-limit reset, a warm prompt cache reaching its
+expiry. Between those, an idle session keeps the last line, so the `cache:`
+and rate-limit countdowns stand still. To keep them moving, add
+`"refreshInterval": 10` (seconds) to the `statusLine` entry. A warm render
+starts no process, so a short interval costs little.
 
 To try it without touching settings, pipe a payload in by hand:
 
@@ -201,27 +210,46 @@ out. `session:` and `ctx:` always print.
 | `Model:` | `model.display_name` (else `model.id`) as `Opus 5.5`, then `effort.level` | a model or effort is present |
 | `[Claude#v] -> <latest> claude update` | `version` against `claudeCodeLatestVersion` in `<config>/.omc/update-check.json` | the cached latest is newer |
 | `5h:` `wk:` | `rate_limits.five_hour` and `.seven_day`: `used_percentage`, and `resets_at` as a countdown | the window is in the payload |
+| `spend:` | `rate_limits.spend_limit` from a Claude apps gateway: `used_percentage`, `resets_at` as a countdown, then `$used/$limit` from `used_usd` and `limit_usd` | the gateway sets a spend limit |
 | `thinking` | a thinking block in the transcript written within the last 30 s | yes |
 | `session:` | `cost.total_duration_ms`, in whole minutes | always |
 | `skill:` | the last `Skill` call in the transcript, with up to 15 columns of its arguments | a skill was called |
 | `ctx:` | `context_window.used_percentage`, else tokens against the window size | always |
+| `cache:` | `prompt_cache`: time left before the warm cache expires (`4m`, `42s`), `warm` without an expiry, or `cold` with `recache_tokens_if_cold` (`cold(45k)`); then `miss:N` with the causes of the last miss (`miss:2(tools_changed)`) | a response this session reported cache tokens (`caching_observed`) |
 | `🔧` `🤖` `⚡` | transcript counts: tool calls, agent spawns (`Task`/`Agent`), skill calls | the count is not zero |
 | `[!] ctx N% >= 80% threshold - run /compact` | context fill from 80 (`[!!]` from 90) | yes |
 | `[!] claude v - paste: ! claude update`, `[!] omc v available` (OMC installed from the plugin marketplace) or `[!] omc v - paste: ! npm i -g oh-my-claude-sisyphus@latest` | the update cache | a newer version is cached |
 
 Details:
 
-- Percentages are rounded and clamped to 0-100. A bar is 8 columns for rate
-  limits and 10 for context.
+- Percentages are rounded and clamped to 0-100, except `spend:`, which goes
+  past 100 once the limit is exceeded (its bar stops full) and stops at 999. A
+  bar is 8 columns for rate limits and 10 for context.
+- The `spend:` dollars are an estimate the gateway makes from token counts,
+  not a billed amount. Claude Code fetches them about every five minutes, so
+  they can be that much older than the percentage. They are left out unless
+  both amounts are under a billion and the limit is above zero.
 - Rate-limit color: green under 70, yellow 70-89, red from 90. Context: green,
   yellow from 70, yellow with ` COMPRESS?` from 80, red with ` CRITICAL` from 85.
   `session:` is yellow past 60 minutes or 70% context, red past 120 minutes or
-  85%. The number always prints, so color is never the only signal.
+  85%. `cache:` is green while warm, and yellow in its last minute and when
+  cold. `miss:` is yellow for five minutes after the last miss (and while
+  `last_miss_at` is missing), then dim. The
+  number always prints, so color is never the only signal.
 - A countdown reads `0h18m`, `1h41m` or `6d5h`. It is omitted when `resets_at`
   is missing, not a number, not in the future, or more than 366 days ahead.
-- Strings copied out of the input (model, effort, branch, profile, skill) lose
-  control characters and zero-width or bidirectional marks, so a field cannot
-  inject an escape sequence or reorder the line. They are cut at 64 characters.
+- The cache reads `cold` once its `expires_at` has passed, even when the
+  payload still says `warm`: the payload is from the last run. An expiry more
+  than 61 minutes ahead gets no countdown, because the longest cache lifetime
+  is an hour. A miss is Claude Code's count: a request that wrote again more
+  than 5% (and at least 2,000 tokens) of what it could have read from the
+  cache, with no compaction or tool-result clearing to explain it. The last
+  miss shows at most two cause names, then a count of the rest (`+2`). A count
+  past 999 reads `999+`.
+- Strings copied out of the input (model, effort, branch, profile, skill, miss
+  causes) lose control characters and zero-width or bidirectional marks, so a
+  field cannot inject an escape sequence or reorder the line. They are cut at
+  64 characters.
 - Widths count CJK as two columns and zero-width marks as none.
 - The OMC segments need oh-my-claudecode. Without it there is no `[OMC...]`
   segment, and no update hints either, because the update cache is OMC's.
@@ -363,6 +391,11 @@ Left out, because it is live state that this binary does not track:
 - The usage-API merge. The HUD asks Anthropic for usage; this binary shows
   `rate_limits` from the payload as is, so its percentages can differ by a few
   points, and it never prints the stale (`*`) and estimate (`~`) markers.
+
+Added:
+
+- `cache:` (prompt cache) and `spend:` (gateway spend limit), from payload
+  fields Claude Code added later.
 
 Different on purpose:
 
